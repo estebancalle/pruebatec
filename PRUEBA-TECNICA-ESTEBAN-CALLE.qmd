@@ -1,0 +1,712 @@
+---
+title: "PRUEBA-TECNICA-ESTEBAN-CALLE"
+## Many code chunk options can be set in execute
+execute: 
+  message: false
+  warning: false
+  echo: true
+  cache: true
+## Most Figure options are set in format > html  
+format: 
+  html:
+    # fig-height: 5
+    # fig-dpi: 300
+    # fig-width: 8.88
+    fig-align: center
+
+## Some options need to be set in the knitr engine
+
+knitr:
+  opts_chunk:
+    out.width: 100%
+    #fig.showtext: TRUE
+    code-fold: show
+    comment: "#>"
+toc: True
+df-print: paged
+editor: visual
+---
+
+
+# Puesta a punto del entorno de trabajo
+
+Creamos directorios e instalación de paquetes (librerías necesarias):
+
+```{r}
+#| label: Instalación
+#| output: false
+
+# ## Require carga los paquetes de CRAN y los instala si faltan
+
+packages <- c("here",  # rutas fáciles y reproducibles
+          "tidyverse", # data wrangling
+          "glue", # f-strings
+          "rio", # fácil importación y exportación
+          "dplyr", # pipes
+          "tibble", # Tibbles functionality
+          "purrr", # functional programing,
+          "flextable", # table formats,
+          "janitor", # data cleaning
+          "DataExplorer", # EDA
+          "SmartEDA",    # EDA
+          "dlookr", # EDA
+          "ggstatsplot", # visualization with statistical details"
+          "gtsummary",
+          "moments",
+          "ggpubr",
+          "GGally",
+          "PerformanceAnalytics",
+          "performance",
+          "caret",
+          "recipes",
+          "Boruta",
+          "yardstick",
+          "ROCR",
+          "rio"
+)
+
+# Install packages not yet installed
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(packages[!installed_packages])
+}
+
+# Packages loading
+invisible(lapply(packages, library, character.only = TRUE))
+
+
+# Creación de directorios
+if (!dir.exists(here("Data"))) {
+  dir.create(here("Data"))
+}
+# if (!dir.exists(here("Plots"))) {
+#   dir.create(here("Plots"))
+# }
+# if (!dir.exists(here("Tables"))) {
+#   dir.create(here("Tables"))
+# }
+# if (!dir.exists(here("Models"))) {
+#   dir.create(here("Models"))
+# }
+# 
+# if (!dir.exists(here("EDA_reports"))) {
+#   dir.create(here("EDA_reports"))
+# }
+```
+
+
+# Cargamos los datos
+
+```{r}
+
+datos <- read_csv(here("Data/churn.csv"), na = c("",NA))
+datos 
+```
+
+# Análisis exploratorio
+
+Resumen de los datos:
+
+```{r}
+# Resumen del set de datos
+glimpse(datos)
+```
+
+## Tipo de variables
+
+Limpiamos los nombres de las variables y corregimos los tipos de datos:
+Hacemos factores: "churn", "international_plan", "voice_mail_plan", "area_code", "state"
+Eliminamos account length al no darnos información al igual que numero de telefono.
+
+
+```{r}
+# corregimos etiqueta
+datos$Churn <- if_else(datos$Churn == "False.", "False", "True")
+
+# pasamos a factor varias variables
+datos <- datos |>
+  dplyr::select(-c("account_length","phone_number"))|>
+  janitor::clean_names() |>
+  mutate(across(
+    .cols = c("churn", "international_plan", "voice_mail_plan", "area_code", "state"),
+    .fns = factor
+  ))
+  
+# Resumen del set de datos limpiados
+glimpse(datos)
+
+```
+
+
+## Características generales dataset "The big picture"
+
+Descripciones básicas y generales del dataset:
+
+```{r}
+DataExplorer::introduce(datos) %>% t() 
+```
+
+```{r}
+ dlookr::diagnose(datos) %>% flextable()
+```
+
+
+No parece haber ningún dato faltante
+
+
+## Exploración variables categóricas (discretas)
+
+Variable discreta objetivo por otra variable discreta
+
+```{r}
+DataExplorer::plot_bar(datos, by = "churn")
+```
+
+En cuanto a las proporciones de las variables categoricas respecto a churn: podemos intuir que international plan y quiza voice mail podrían ser influyentes en el churn
+
+```{r}
+SmartEDA::ExpCatViz(datos, Page = c(2,3))
+```
+
+
+Chrun es el porcentaje de clientes que dejan la telco para pasarse a una compañía de la competencia. Según los datos es el 14%.
+
+Podemos ver que es un dataset donde las categorias están desbalanceadas. En los futuros modelos si siempre se predice *churn = false*, el porcentaje de aciertos será aproximadamente del 85%. Este es el porcentaje mínimo que hay que intentar superar con los modelos predictivos.
+
+
+## Exploración variables numéricas con estadísticas descriptivas
+
+```{r}
+datos %>% 
+ dlookr::diagnose_numeric() %>% 
+  flextable()
+```
+
+```{r}
+SmartEDA::ExpNumStat(datos, by="GA", gp="churn", Outlier=TRUE, Qnt = c(.25, .75), round = 2) %>% flextable()
+```
+
+
+Se detectan valores 0 y outliers
+
+
+
+
+
+## **Distribución de variables continuas**
+
+Muchas pruebas estadísticas dependen de datos simétricos y normalmente distribuidos
+
+```{r}
+DataExplorer::plot_histogram(datos)
+DataExplorer::plot_density(datos)
+```
+La mayoria de las variables tienen distribución normal
+Se detectan fluctuaciones en varias variables. *Number of custumer* total day calls se podria categorizar. Total *intl calls* puede tener outliers influyentes 
+
+
+# Normalidad de las variables
+
+Hay dos formas principales de comprobar la normalidad: utilizando un gráfico cuantil-cuantil y utilizando una prueba estadística adecuada. ¡Y los necesitamos a ambos!
+
+```{r}
+DataExplorer::plot_qq(datos)
+DataExplorer::plot_qq(datos, by = "churn")
+```
+number of custumer calls parece relevante según el gráfico
+
+```{r}
+
+normality(datos) %>%
+  mutate(across(where(is.numeric), round,3)) %>% flextable()
+
+```
+
+Excepto en las variables que podriamos categorizar se aprecia normalidad. Las variables donde el test de normalidad indica no normalidad puede ser debido a outliers ya que en el qqplot se aprecia que lo son.
+
+
+# Exploración variables categóricas y numéricas hipotesis testing
+
+En primer lugar, la función tbl_summary() del paquete {gtsummary} resume todas las variables categóricas mediante recuentos y porcentajes, mientras que todas las variables numéricas según la mediana y el IQR. El argumento by = dentro de tbl_summary() especifica una variable de agrupación. Luego, la función add_p() realiza pruebas estadísticas con todas las variables y proporciona valores p. Para las variables numéricas, utiliza la prueba no paramétrica de suma de rangos de Wilcoxon para comparar dos grupos y la prueba no paramétrica de suma de rangos de Kruskal-Wallis para más de dos grupos. Las variables categóricas se verifican con la prueba exacta de Fisher, si el número de observaciones en alguno de los grupos es inferior a 5, o con la prueba Chi-cuadrado de Pearson para obtener más datos.
+```{r}
+datos %>%
+  #select(survived, sex, parch, pclass, sib_sp) %>% 
+  gtsummary::tbl_summary(by = churn) %>% 
+ gtsummary::add_p()
+```
+Los p-valores indican que la mayoría de las variables serian influyentes excepto total night calls, eve calls, total day calls,
+
+
+## Exploramos correlaciones
+
+Las variables correlacionadas son redundantes para los modelos
+
+```{r}
+
+dlookr::plot_correlate(datos, method = "kendall")
+ggstatsplot::ggcorrmat(data = datos)
+datos %>%
+  group_by(churn) %>%
+  plot_correlate()
+```
+
+Vemos variables correlacionadas como el total day minutes y total day charge, y el eve calls y charge, y total calls y total charge.
+
+Podríamos limitarnos a usar cargos en vez de los totales, pero desconozco si la compañia tiene planes para diferentes usuarios y por ello no las voy a eliminar aunque tengan información redundante.
+
+
+
+
+# Genera una nueva variable categórica de 2 niveles que agrupe de alguna manera a los clientes por niveles de consumo
+
+Usaré la mediana de la variable total_day_charge para crear una variable consumo debajo de la mediana: bajo, por encima: elevado
+
+
+```{r}
+
+datos$consumo <- if_else(datos$total_day_charge >= 30.62, "Elevado", "Bajo")
+datos$consumo <- factor(datos$consumo)
+glimpse(datos)
+```
+
+# Modelado
+
+
+
+## **División de los datos en entrenamiento y test**
+
+80% test
+
+```{r}
+set.seed(123)
+# Se crean los índices de las observaciones de entrenamiento
+train <- caret::createDataPartition(y = datos$churn, p = 0.8, list = FALSE, times = 1)
+datos_train <- datos[train, ]
+datos_test  <- datos[-train, ]
+```
+
+```{r}
+
+(distribucion_train <- prop.table(table(datos_train$churn)) %>% round(3))
+(distribucion_test  <- prop.table(table(datos_test$churn)) %>% round(3))
+(Tabla_distribucion_completa <- data.frame(train = distribucion_train, test = distribucion_test ))
+
+```
+
+Conservamos la distribución de ambas clases en el reparto.
+
+# Preprocesamiento de los datos
+
+
+-   Exclusión de variables con varianza próxima a cero
+
+-   Reducción de dimensionalidad
+
+-   Estandarización de las variables numéricas
+
+-   Binarización de las variables cualitativas
+
+La idea detrás de este paquete es la siguiente:
+
+Definir cuál es la variable respuesta, los predictores y el set de datos de entrenamiento, recipe(). Definir todas las transformaciones (escalado, selección, filtrado...) que se desea aplicar, step\_(). Aprender los parámetros necesarios para dichas transformaciones con las observaciones de entrenamiento rep(). Aplicar las trasformaciones aprendidas a cualquier conjunto de datos bake().
+
+
+
+
+
+```{r}
+
+objeto_recipe <- recipes::recipe(formula = churn ~ .,
+                        data =  datos_train)
+objeto_recipe
+```
+
+## Variables con varianza próxima a cero
+
+No se deben incluir en el modelo predictores que contengan un único valor (cero-varianza) ya que no aportan información. Tampoco es conveniente incluir predictores que tengan una varianza próxima a cero
+
+```{r}
+objeto_recipe <- objeto_recipe %>% step_nzv(all_predictors())
+```
+
+# Estandarización y escalado
+
+para hacer comparables las medidas de las variables cuantitativas
+
+```{r}
+objeto_recipe <- objeto_recipe %>% step_center(all_numeric())
+objeto_recipe <- objeto_recipe %>% step_scale(all_numeric())
+```
+
+```{r}
+objeto_recipe <- objeto_recipe %>% step_dummy(all_nominal(), -all_outcomes())
+```
+
+Una vez que se ha creado el objeto recipe con todas las transformaciones de preprocesado, se aprenden con los datos de entrenamiento y se aplican a los dos conjuntos.
+
+```{r}
+# Se entrena el objeto recipe
+trained_recipe <- prep(objeto_recipe, training = datos_train)
+trained_recipe
+```
+
+```{r}
+# Se aplican las transformaciones al conjunto de entrenamiento y de test
+datos_train_prep <- bake(trained_recipe, new_data = datos_train)
+datos_test_prep  <- bake(trained_recipe, new_data = datos_test)
+
+glimpse(datos_train_prep)
+
+```
+
+# Modelo
+
+Este proceso es iterativo, aunque no hay tiempo para ello. Intentaré hacer un ensemble entre random forest y support vector machine radial
+
+## Modelo random forest
+
+
+```{r}
+#| output: false
+# Función para entrenar  modelo RF
+
+RF_model_func <- function(traindf) {
+  
+  
+  # Variables Cross Validation
+  particiones  <- 5
+  repeticiones <- 5
+  
+  
+  
+  # Hiperparámetros
+hiperparametros <- expand.grid(mtry = c(2, 5, 10, 50),
+                                 min.node.size = c(2, 3, 4, 5, 10),
+                                 splitrule = "gini")
+  
+  # Generar semillas para CV
+  
+  # Iniciamos una lista vacía que almacenará las semillas de aleatoriedad con las
+  # que trabajaremos. Haremos 10 folds * 5 repeticiones = lista con 50 bolsillos +
+  # 1 para el modelo final (Lo pone en la documentación de ?trainControl() ).
+  # Debemos llenar todos los bolsillos con vectores con 50 numeros cada uno, menos
+  # en el último bolsillo de la lista semillas, que debe ser un único número.
+  
+  semillas <- vector(mode = "list", length = (particiones*repeticiones) +1)  
+  
+  
+  # Llenamos la lista/vector con semillas al azar, elegidas entre 1 y 1000.
+  # Creamos, por tanto, una lista de listas. Todos los bolsillos de la lista,
+  # menos el último, tendrán vectores con 16 números de longitud 
+  #
+  # ejemplo: (5 folds * 5 repeticiones) + 1 evaluación final = 51
+  # Hemos usado lapply porque queremos que nos devuelva una lista/vector
+  
+  semillas <- lapply(semillas, function(x) sample.int(1000, size=nrow(hiperparametros)))
+  
+  semillas[[(particiones*repeticiones) +1]] <- sample.int(1000, size= 1)
+  
+  
+  #str(semillas)
+  
+  
+  #tic() # Inicio conteo tiempo
+  
+  # Definir control de entrenamiento con validación cruzada repetida con SMOTE y semillas generadas
+  
+  control <- trainControl(method = "repeatedcv", # Método de validación cruzada
+                          number = particiones, # Número de particiones
+                          repeats = repeticiones, # Número de repeticiones
+                          #sampling = "smote", # Método de sobremuestreo (SMOTE)
+                          classProbs = TRUE, # Usar probabilidades de clase para predicciones
+                          summaryFunction = twoClassSummary, # Métricas de evaluación para clases multiclase
+                          seeds = semillas,
+                          #summaryFunction = multiClassSummary, 
+                          verboseIter = T,
+                          #summaryFunction = defaultSummary,
+                          # selectionFunction = "best", 
+                          # savePredictions = "final",
+                          returnResamp = "final",
+                          allowParallel = TRUE) # Semillas para reproducibilidad
+  
+  
+  # # Clusters para procesamiento paralelo
+  # cl = makePSOCKcluster(1)
+  # registerDoParallel(cl)
+  
+  
+  set.seed(1993)
+  modelo_RF <- train(churn ~ ., data = traindf, 
+                     method = "ranger",
+                     num.trees = 500,
+                     trControl = control, 
+                     tuneGrid = hiperparametros,
+                     importance = "impurity",
+                     metric = "ROC", # Incluir métricas de evaluación
+                     maximize = TRUE) # Indicar que se debe maximizar la métrica MCC
+  
+  # finalizamos paralelización
+  #stopCluster(cl)
+  
+  modelo_RF                
+  
+  #toc() # fin conteo tiempo
+  
+  # Visualizamos optimización hiperparámetros
+  ggplot(modelo_RF, highlight = TRUE) +
+    scale_x_continuous(breaks = hiperparametros$k) +
+    labs(title = "Evolución del accuracy en función de K", x = "K") +
+    theme_bw() +
+    geom_line(color="blue")
+  
+  # La función devuelve el modelo
+  return(modelo_RF)
+}
+
+
+### RF - Normal --------------------------------------------------------
+
+
+# Entrenamos RF
+modelo_rf <- RF_model_func(datos_train_prep)
+
+# Predicciones
+pred_rf <- predict(modelo_rf,newdata = datos_test_prep, type = "raw")
+
+# Probabilidades Predicciones
+prob_rf <- predict(modelo_rf,newdata = datos_test_prep, type = "prob")
+
+
+```
+
+
+```{r}
+modelo_rf
+# Matriz confusión
+(conf_rf<- caret::confusionMatrix(pred_rf, datos_test_prep$churn, positive= "True"))
+```
+
+## Visualizamos curva roc
+
+
+```{r}
+predictions <- prob_rf$True
+labels <- datos_test_prep$churn
+pred <- ROCR::prediction(predictions, labels)
+pred
+```
+
+```{r}
+perf <-  ROCR::performance(pred, "tpr", "fpr")
+plot(perf, av = "threshold", colorize = TRUE)
+```
+
+Con random forest conseguimos un buen modelo generalizable. Con un valor  Kappa : 0.7888. Esta métrica es buena para las clasificación de clases desbalanceadas.
+
+Las variables más importantes serían:
+
+```{r}
+
+
+varImp(modelo_rf)
+
+
+```
+
+
+
+# Probamos con svm Radial
+
+```{r}
+# Función para entrenar  modelo SVML
+
+SVMR_model_func <- function(traindf) {
+  
+  
+  # Variables Cross Validation
+  particiones  <- 5
+  repeticiones <- 3
+  
+  
+  
+  # Hiperparámetros
+  hiperparametros <- expand.grid(sigma = c(0.0001, 0.001),
+                                 C = c(1, 10))
+  
+  # Generar semillas para CV
+  
+  # Iniciamos una lista vacía que almacenará las semillas de aleatoriedad con las
+  # que trabajaremos. Haremos 10 folds * 5 repeticiones = lista con 50 bolsillos +
+  # 1 para el modelo final (Lo pone en la documentación de ?trainControl() ).
+  # Debemos llenar todos los bolsillos con vectores con 50 numeros cada uno, menos
+  # en el último bolsillo de la lista semillas, que debe ser un único número.
+  
+  semillas <- vector(mode = "list", length = (particiones*repeticiones) +1)  
+  
+  
+  # Llenamos la lista/vector con semillas al azar, elegidas entre 1 y 1000.
+  # Creamos, por tanto, una lista de listas. Todos los bolsillos de la lista,
+  # menos el último, tendrán vectores con 16 números de longitud 
+  #
+  # ejemplo: (10 folds * 5 repeticiones) + 1 evaluación final = 51
+  # Hemos usado lapply porque queremos que nos devuelva una lista/vector
+  
+  semillas <- lapply(semillas, function(x) sample.int(1000, size=nrow(hiperparametros)))
+  
+  semillas[[(particiones*repeticiones) +1]] <- sample.int(1000, size= 1)
+  
+  
+  #str(semillas)
+  
+  
+ 
+  # Definir control de entrenamiento con validación cruzada repetida con SMOTE y semillas generadas
+  
+  control <- trainControl(method = "repeatedcv", # Método de validación cruzada
+                          number = particiones, # Número de particiones
+                          repeats = repeticiones, # Número de repeticiones
+                          #sampling = "smote", # Método de sobremuestreo (SMOTE)
+                          classProbs = TRUE, # Usar probabilidades de clase para predicciones
+                          summaryFunction = twoClassSummary, # Métricas de evaluación para clases multiclase
+                          seeds = semillas,
+                          #summaryFunction = multiClassSummary, 
+                          verboseIter = T,
+                          #summaryFunction = defaultSummary,
+                          # selectionFunction = "best", 
+                          # savePredictions = "final",
+                          returnResamp = "final",
+                          allowParallel = TRUE) # Semillas para reproducibilidad
+  
+  
+ 
+  
+  
+  set.seed(1993)
+  modelo_SVMR <- train(churn ~ ., data = traindf, 
+                       method = "svmRadial",
+                       trControl = control, 
+                       tuneGrid = hiperparametros, 
+                       metric = "ROC", # Incluir métricas de evaluación
+                       maximize = TRUE) # Indicar que se debe maximizar la métrica MCC
+  
+  
+  
+  modelo_SVMR                
+  
+  
+  
+  # Visualizamos optimización hiperparámetros
+  ggplot(modelo_SVMR, highlight = TRUE) +
+    scale_x_continuous(breaks = hiperparametros$k) +
+    labs(title = "Evolución del accuracy en función de K", x = "K") +
+    theme_bw() +
+    geom_line(color="blue")
+  
+  # La función devuelve el modelo
+  return(modelo_SVMR)
+}
+```
+
+
+
+```{r}
+### RF - Normal --------------------------------------------------------
+
+
+# Entrenamos RF
+modelo_svmr <- SVMR_model_func(datos_train_prep)
+
+# Predicciones
+pred_svmr <- predict(modelo_svmr,newdata = datos_test_prep, type = "raw")
+
+# Probabilidades Predicciones
+prob_svmr <- predict(modelo_svmr,newdata = datos_test_prep, type = "prob")
+
+```
+
+
+```{r}
+modelo_svmr
+# Matriz confusión
+(conf_svmr<- caret::confusionMatrix(pred_svmr, datos_test_prep$churn, positive= "True"))
+```
+
+Tendríamos que probar otro modelo ya que el valor kappa no es muy bueno. Ademas la sensitividad es menor al 0.5%. No tendría sentido hacer un ensemble con este modelo. No tenemos tiempo a pro
+
+
+
+## Visualizamos curva roc
+
+
+```{r}
+predictions <- prob_svmr$True
+labels <- datos_test_prep$churn
+pred <- ROCR::prediction(predictions, labels)
+pred
+```
+
+```{r}
+perf <-  ROCR::performance(pred, "tpr", "fpr")
+plot(perf, av = "threshold", colorize = TRUE)
+```
+
+
+Tendríamos que probar otro modelo ya que el valor kappa no es muy bueno. Ademas la sensitividad es menor al 0.5%. No tendría sentido hacer un ensemble con este modelo. No tenemos tiempo a probar más modelos. La curva ROC de svm Radial muestra un peor desempeño del modelo en comparación con Random forest.
+
+Random forest sería nuestro modelo a seguir.
+
+
+
+# Aplicamos boruta para una selección de características extra:
+
+```{r}
+# Boruta
+boruta <-
+  Boruta(churn ~ .,
+         data = datos_train_prep,
+         doTrace = 2,
+         maxRuns = 100) # Número de iteraciones
+
+
+
+
+
+# Tentativa de arreglo provisional de Boruta
+# La siguiente decisión sobre los atributos provisionales se basa en comparar
+# la puntuación Z mediana de cada atributo con la puntuación Z mediana del
+# mejor atributo de sombra. Los atributos que tengan una puntuación Z mediana
+# mayor o igual que la del mejor atributo de sombra se clasificarán como 
+# confirmados, mientras que los que tengan una puntuación Z mediana menor
+# se clasificarán como rechazados.
+final.boruta <- TentativeRoughFix(boruta)
+
+
+
+# vector con los genes (predictores) seleccionados
+sel <- getSelectedAttributes(final.boruta, withTentative = F)
+sel_formula <- getNonRejectedFormula(final.boruta)
+sel_formula
+```
+
+
+Las variables seleccionadas por boruta como las más importantes para el modelo serían las siguientes:
+churn ~ total_day_minutes + total_day_charge + total_eve_minutes + 
+    total_eve_charge + total_night_minutes + total_night_charge + 
+    total_intl_minutes + total_intl_calls + total_intl_charge + 
+    number_customer_service_calls + international_plan_yes + 
+    voice_mail_plan_yes + consumo_Elevado
+
+
+
+
+# Ejercicio 4
+
+1- 
+Seleccionaría los clientes que tuvieran las mismas características que los clientes que estén por encima del 75% de la distribución total de todos los clientes en cuestión de consumo
+
+
+2) 
+Podríamos realizar una segmentación similar a la anterior en basa a la categoría creada de interes, utilizar un algoritmo de clasificación no supervisada de clasificación.
+Si el nuevo cliente entra dentro del grupo sería un candidato oportuno.
+
+
